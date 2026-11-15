@@ -1,6 +1,6 @@
 [project]
 name = "beetbox"
-version = "1.0.0"
+version = "1.1.0"
 description = "A lightweight web frontend for the beets music library manager"
 readme = "README.md"
 license = { text = "MIT" }
