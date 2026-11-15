@@ -108,6 +108,9 @@ class Settings:
     # ListenBrainz user whose recommendations and fresh releases Discover shows.
     listenbrainz_user: str = ""
     lyrics_romaji: str = "below"
+    # Hours between copies of library.db and state.db (0: none), and how many to keep.
+    backup_hours: int = 24
+    backup_keep: int = 7
 
     @property
     def slskd_enabled(self) -> bool:
@@ -162,6 +165,8 @@ class Settings:
             jellyfin_user=_str("JELLYFIN_USER"),
             listenbrainz_user=_str("LISTENBRAINZ_USER"),
             lyrics_romaji=_str("BEETBOX_LYRICS_ROMAJI", "below").lower() or "below",
+            backup_hours=max(0, _int("BEETBOX_BACKUP_HOURS", 24)),
+            backup_keep=max(1, _int("BEETBOX_BACKUP_KEEP", 7)),
         )
         s.validate()
         return s

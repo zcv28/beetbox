@@ -21,6 +21,7 @@ services:
       # FANARTTV_API_KEY: ""
       # DISCOGS_TOKEN: ""
       # EXTRA_PIP_PACKAGES: "beets-beatport4 requests-oauthlib"
+      # all settings: docs/configuration.md
     volumes:
       - ./config:/config                    # beets config + library.db, beetbox state
       - /srv/music:/music                   # sorted library (beets "directory")

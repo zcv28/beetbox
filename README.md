@@ -14,7 +14,7 @@ docker compose up -d
 
 Open http://localhost:8337. Your beets config is created at `./config/beets/config.yaml` on first start.
 
-Settings are environment variables (`BEETBOX_*`, `SLSKD_*`, `LDAP_*`); see `docker-compose.yml` and `src/beetbox/settings.py`.
+Settings are environment variables; see [docs/configuration.md](docs/configuration.md). beetbox keeps daily copies of the beets library database in `/config/beetbox/backups` ([restoring](docs/configuration.md#backups)).
 
 ## Development
 

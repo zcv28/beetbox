@@ -29,6 +29,7 @@ from .acquire import Acquirer
 from .artist_pictures import ArtistPictures
 from .artwork.service import Artwork
 from .auth import RateLimiter
+from .backup import Backups, library_path
 from .catalog import Catalog
 from .console import Console
 from .inbox import Inbox
@@ -66,9 +67,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
 def create_app(settings: Settings | None = None, background: bool = True) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    beets_ctx.init(settings.beetsdir)
+    lib = beets_ctx.init(settings.beetsdir)
 
     state = State(settings.state_db)
+    backups = Backups(
+        settings.data_dir / "backups",
+        {"library.db": library_path(lib), "state.db": settings.state_db},
+        settings.backup_hours,
+        settings.backup_keep,
+    )
     jobs = JobQueue(state)
     inbox = Inbox(settings, state, jobs)
     console = Console(jobs, str(settings.beetsdir))
@@ -107,6 +114,7 @@ def create_app(settings: Settings | None = None, background: bool = True) -> Fas
     async def lifespan(app: FastAPI):
         if background:
             jobs.start()
+            backups.start()
             inbox.start_watcher()
             if source_watch:
                 source_watch.start()
@@ -119,6 +127,7 @@ def create_app(settings: Settings | None = None, background: bool = True) -> Fas
             if source_watch:
                 source_watch.stop()
             inbox.stop_watcher()
+            backups.stop()
             jobs.stop()
 
     app = FastAPI(
