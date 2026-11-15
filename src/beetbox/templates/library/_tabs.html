@@ -1,0 +1,7 @@
+<nav class="tab-list" data-variant="line" aria-label="Library views">
+  <a class="tab-trigger" href="/library" {% if tab == 'albums' %}aria-current="page"{% endif %}>Albums</a>
+  <a class="tab-trigger" href="/library/artists" {% if tab == 'artists' %}aria-current="page"{% endif %}>Artists</a>
+  <a class="tab-trigger" href="/library/tracks" {% if tab == 'tracks' %}aria-current="page"{% endif %}>Tracks</a>
+  <a class="tab-trigger" href="/library/covers" {% if tab == 'covers' %}aria-current="page"{% endif %}>Covers</a>
+  <a class="tab-trigger" href="/library/pictures" {% if tab == 'pictures' %}aria-current="page"{% endif %}>Artist pictures</a>
+</nav>

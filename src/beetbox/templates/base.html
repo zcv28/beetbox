@@ -1,0 +1,102 @@
+{% from "partials/macros.html" import icon, alert, nav_links, theme_menu %}<!doctype html>
+<html lang="en"{% if theme in ('light', 'dark') %} data-theme="{{ theme }}"{% endif %}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}beetbox{% endblock %} · beetbox</title>
+  <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.webmanifest" crossorigin="use-credentials">
+  {% if theme in ('light', 'dark') %}<meta name="theme-color" content="{{ '#0a0a0a' if theme == 'dark' else '#ffffff' }}">{% else %}<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">{% endif %}
+  <link rel="stylesheet" href="/static/ds/tokens.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/ds/bundle.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js?v={{ version }}" defer></script>
+</head>
+{# Signed in, links and forms swap the page in place (no reload); the player and pop-ups stay. #}
+<body{% if user %} hx-boost="true"{% endif %}>
+{% if user %}
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="sidebar-layout">
+  <aside class="app-sidebar">
+    <div class="sidebar-header"><a class="sidebar-logo" href="/"><span class="brand-mark" aria-hidden="true">b</span><span class="sidebar-logo-text">beetbox</span></a></div>
+    <div class="sidebar-content">
+      {{ nav_links(nav, source_status) }}
+      {% include "partials/jobs_pill.html" %}
+    </div>
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <span class="sidebar-user-name">{{ user }}</span>
+        {{ theme_menu('theme-menu', theme) }}
+        <form class="inline" method="post" action="/logout" hx-boost="false"><button class="btn" data-variant="ghost" data-size="icon-sm" type="submit" aria-label="Log out" title="Log out">{{ icon('log-out') }}</button></form>
+      </div>
+      <p class="hint mono">beetbox {{ version }}</p>
+    </div>
+  </aside>
+
+  <dialog class="sidebar-mobile" id="sidebar-mobile" aria-label="Sections">
+    <button class="sidebar-mobile-close" type="button" aria-label="Close menu">{{ icon('x') }}</button>
+    <div class="sidebar-header"><a class="sidebar-logo" href="/"><span class="brand-mark" aria-hidden="true">b</span>beetbox</a></div>
+    {# The links sit at the bottom of the sheet, where a thumb reaches. #}
+    <div class="sidebar-content">{{ nav_links(nav, source_status) }}</div>
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <span class="sidebar-user-name">{{ user }}</span>
+        {{ theme_menu('theme-menu-sheet', theme) }}
+        <form class="inline" method="post" action="/logout" hx-boost="false"><button class="btn" data-variant="ghost" data-size="sm" type="submit">{{ icon('log-out') }}Log out</button></form>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="app-main">
+    <div class="mobile-bar">
+      <button class="sidebar-trigger" type="button" id="sidebar-open" aria-label="Open menu" aria-controls="sidebar-mobile">{{ icon('menu') }}</button>
+      <a class="sidebar-logo" href="/"><span class="brand-mark" aria-hidden="true">b</span>beetbox</a>
+      <span class="spacer"></span>
+      {% include "partials/jobs_mobile.html" %}
+    </div>
+    <main class="app-content" id="main" tabindex="-1">
+      {% if false %}{% block status %}{% endblock %}{% block section %}{% endblock %}{% endif %}
+      {% block header %}
+      {% set st = self.status()|trim %}
+      {# A page under a section's tabs is headed by the section; the tab names the page. #}
+      <header class="page-header">
+        <h1>{{ self.section()|trim or self.title() }}</h1>
+        {% if st %}<p class="page-description">{{ st }}</p>{% endif %}
+      </header>
+      {% endblock %}
+      {% for f in flashes %}{% call alert(f[0]) %}{{ f[1] }}{% if f|length > 2 and f[2] %}
+        <form class="inline" method="post" action="{{ f[2].url }}">{% for k, v in f[2].vals.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<button class="btn" data-variant="link" data-size="sm">Undo</button></form>{% endif %}{% endcall %}{% endfor %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+<div class="toast-container" data-position="bottom-right" id="toasts" aria-live="polite" hx-preserve></div>
+<p class="sr-only" id="live-status" role="status" hx-preserve></p>
+<section class="card player" id="player-bar" aria-label="Preview" hidden hx-preserve>
+  <div class="player-head">
+    <span class="label">Preview</span>
+    <button class="btn" data-variant="ghost" data-size="icon-xs" type="button" id="player-close" aria-label="Close preview">{{ icon('x') }}</button>
+  </div>
+  <div class="player-name mono" id="player-name"></div>
+  <audio id="player" controls preload="none"></audio>
+</section>
+<dialog class="dialog" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+  <form method="dialog" class="dialog-content">
+    <div class="dialog-header">
+      <h2 class="dialog-title" id="confirm-title">Are you sure?</h2>
+      <p class="dialog-description" id="confirm-text"></p>
+    </div>
+    <div class="dialog-footer">
+      <button class="btn" data-variant="outline" value="cancel" id="confirm-cancel">Cancel</button>
+      <button class="btn" data-variant="destructive" value="ok" id="confirm-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+{% else %}
+{% block bare %}{% endblock %}
+{% endif %}
+</body>
+</html>

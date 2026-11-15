@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import back, cover, history_list, icon, release_path %}
+{% block title %}{{ w.album }}{% endblock %}
+{% block header %}
+<header class="page-header">
+  {{ back('/get/coming', 'Coming in') }}
+  <div class="request-head">{{ cover(wanted_cover(w), 'cover cover-lg') }}<div>
+  <h1{{ w.album|lang }}>{{ w.album }}{% if w.album_original and w.album_original != w.album %}<span class="original"{{ w.album_original|lang }}>{{ w.album_original }}</span>{% endif %}</h1>
+  <p class="page-description"><span{{ w.artist|lang }}>{{ w.artist }}</span>{% if w.year %}, {{ w.year }}{% endif %}{% if w.kind == 'upgrade' %}: a better copy of <a href="/library/album/{{ w.album_id }}">your album</a>, which it replaces{% endif %}</p>
+  </div></div>
+</header>
+{% endblock %}
+{% block content %}
+{% include "get/_source.html" %}
+{# Reloads itself as the request moves on. The links and buttons inside must not inherit
+   how it reloads (hx-select would cut the next page down to nothing). #}
+<div id="request-live" hx-get="/wanted/{{ w.id }}" hx-select="#request-live" hx-swap="outerHTML" hx-disinherit="hx-select hx-swap" hx-trigger="refresh, every 30s [!document.hidden]" data-refresh="wanted downloads">
+{% set stage, stopped = wanted_stage(w) %}{{ release_path(stage, stopped) }}
+{% set find_url = '/get/find?q=' ~ (w.artist ~ ' ' ~ w.album)|q ~ '&artist=' ~ w.artist|q ~ '&album=' ~ w.album|q ~ '&w=' ~ w.id %}
+{% set asks = w.status in ('choosing', 'failed', 'cancelled') %}
+{% if asks %}
+{# Stopped: what happened, once, and the ways on. #}
+<div class="ask" data-boxed data-tone="{{ {'choosing': 'warning', 'failed': 'destructive'}.get(w.status, '') }}">
+  <p class="ask-title">{% if w.status == 'cancelled' %}You stopped getting it{% else %}{{ wanted_reason(w) }}{% endif %}</p>
+  {# The title says what happened; this says only how each way on works. #}
+  <p class="hint">{% if w.status == 'choosing' and w.offers %}Pick a copy below, or search again: it{% else %}Search again{% endif %} starts over and skips copies that already failed. A copy you download under Find by hand comes back to this request; Import by hand takes the files from the inbox.</p>
+  <div class="bar tight">
+    <form class="inline" method="post" action="/wanted/{{ w.id }}/retry"><button class="btn" data-variant="{{ 'outline' if w.offers and w.status == 'choosing' else 'default' }}" data-size="sm">Search again</button></form>
+    {% if sources_enabled %}<a class="btn" data-variant="outline" data-size="sm" href="{{ find_url }}">Find by hand</a>{% endif %}
+    <a class="btn" data-variant="ghost" data-size="sm" href="/inbox">Import by hand</a>
+    <span class="spacer"></span>
+    {% if w.status == 'choosing' %}<form class="inline" method="post" action="/wanted/{{ w.id }}/cancel" data-confirm="Stop getting {{ w.album }}?" data-confirm-button="Stop getting it"><button class="btn" data-variant="outline" data-tone="destructive" data-size="sm">Cancel</button></form>{% else %}<form class="inline" method="post" action="/wanted/{{ w.id }}/remove"><button class="btn" data-variant="outline" data-tone="destructive" data-size="sm">Remove from the list</button></form>{% endif %}
+  </div>
+</div>
+{% else %}
+<div class="bar request-state">
+  {% include "wanted/_chip.html" %}
+  {% if wanted_detail(w) %}<span class="hint">{{ wanted_detail(w) }}</span>{% endif %}
+  {% if w.error and w.status in ('queued', 'searching', 'downloading') %}<span class="hint">({{ w.error }})</span>{% endif %}
+</div>
+{% endif %}
+{% if not asks %}
+<div class="bar">
+  {% if w.status == 'review' and folder %}<a class="btn" href="/inbox/folder?f={{ w.folder|q }}">Review it in the inbox{{ icon('arrow-right') }}</a>{% endif %}
+  {% if w.status == 'downloading' %}<form class="inline" method="post" action="/wanted/{{ w.id }}/skip"><button class="btn" data-variant="outline" data-size="sm">Get it from someone else</button></form>{% endif %}
+  {% if sources_enabled and not asks and w.status != 'done' %}<a class="btn" data-variant="outline" data-size="sm" href="{{ find_url }}">Find by hand</a>{% endif %}
+  {% if w.status in ('queued', 'searching', 'downloading', 'arrived', 'review') %}<form class="inline" method="post" action="/wanted/{{ w.id }}/cancel" data-confirm="Stop getting {{ w.album }}?{% if w.status == 'downloading' %} Its download stops too.{% elif w.status in ('arrived', 'review') %} What it downloaded stays in the inbox as a folder like any other.{% endif %}" data-confirm-button="Stop getting it"><button class="btn" data-variant="outline" data-tone="destructive" data-size="sm">Cancel</button></form>{% endif %}
+  {% if w.status == 'done' %}<form class="inline" method="post" action="/wanted/{{ w.id }}/remove"><button class="btn" data-variant="outline" data-tone="destructive" data-size="sm">Remove from the list</button></form>{% endif %}
+</div>
+{% endif %}
+
+{% if w.offers and w.status in ('choosing', 'failed', 'cancelled') %}
+<h2 id="copies">Copies found</h2>
+<p class="hint">Ranked best first. The copy you pick is imported against this album like any other folder.</p>
+<div class="table-container" data-density="compact"><table class="table stack-sm">
+  <thead><tr><th class="table-head">Folder</th><th class="table-head">Format</th><th class="table-head num">Tracks</th><th class="table-head num">Size</th><th class="table-head hide-sm">From</th><th class="table-head num"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>
+  {% for o in w.offers %}
+  <tr class="table-row">
+    {% set was_tried = (o.origin ~ '|' ~ o.folder) in (w.tried or []) %}
+    <td class="table-cell col-main"><span class="strong"{{ o.folder_name|lang }}>{{ o.folder_name }}</span>{% if was_tried %} <span class="badge" data-variant="outline">Tried</span>{% elif loop.first %} <span class="badge" data-variant="secondary">Best match</span>{% endif %}{% if o.why %}<p class="hint">{{ o.why|join(' · ')|capitalize }}</p>{% endif %}</td>
+    <td class="table-cell"><span class="badge" data-variant="outline" data-mono>{{ o.format }}{% if o.bitrate and not o.lossless %} {{ o.bitrate }}{% endif %}</span></td>
+    <td class="table-cell num">{{ o.tracks }}{% if w.tracks %}<span class="hint">/{{ w.tracks|length }}</span>{% endif %}<span class="show-sm"> tracks</span></td>
+    <td class="table-cell num">{{ (o.size or 0)|size }}</td>
+    <td class="table-cell hide-sm hint">{{ o.origin }}{% if o.free_slot %}, free slot{% elif o.queue %}, {{ o.queue }} queued{% endif %}</td>
+    <td class="table-cell num col-actions"><form class="inline" method="post" action="/wanted/{{ w.id }}/choose"><input type="hidden" name="origin" value="{{ o.origin }}"><input type="hidden" name="folder" value="{{ o.folder }}"><button class="btn" {% if not loop.first or was_tried or w.status != 'choosing' %}data-variant="outline" {% endif %}data-size="sm">{{ 'Download it again' if was_tried else 'Download this one' }}</button></form></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+
+<div class="columns">
+<section>
+<h2>What was tried</h2>
+{% if w.history %}{{ history_list(w.history) }}
+{% elif w.status == 'queued' %}<p class="hint">Nothing yet: it waits its turn to search.</p>
+{% else %}<p class="hint">Nothing was recorded for it.</p>{% endif %}
+</section>
+<section>
+<h2>Searches</h2>
+{% if searches %}
+<ul class="plain search-log">{% for s in searches %}<li><a href="/get/find/s/{{ s.id }}"{{ s.text|lang }}>{{ s.text }}</a> <span class="hint">{% if s.answers is not none %}{{ s.answers|plural('answer') }}, {% endif %}{{ s.created_at|ago }}</span></li>{% endfor %}</ul>
+<p class="hint">Older searches may have expired at the download source.</p>
+{% else %}<p class="hint">No searches yet.</p>{% endif %}
+</section>
+</div>
+
+{% if w.tracks %}
+<details class="box">
+  <summary>Expected tracks <span class="hint">{{ w.tracks|length }} · {{ w.tracks|sum(attribute='length')|duration }}</span></summary>
+  <div class="box-body"><ol class="file-list">{% for t in w.tracks %}<li><span{{ t.title|lang }}>{{ t.title }}</span>{% if t.length %} <span class="hint mono">{{ t.length|duration }}</span>{% endif %}</li>{% endfor %}</ol></div>
+</details>
+{% endif %}
+</div>
+{% endblock %}

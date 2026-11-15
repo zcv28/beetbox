@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import alert %}
+{% block title %}Log in{% endblock %}
+{% block bare %}
+<main class="login">
+<section class="card" aria-labelledby="login-title">
+  <div class="card-header">
+    <span class="brand-mark" aria-hidden="true">b</span>
+    <h1 class="card-title" id="login-title">Log in to beetbox</h1>
+    <p class="card-description">{% if ldap %}Sign in with your directory account.{% else %}Use the password from <code>BEETBOX_PASSWORD</code>.{% endif %}</p>
+  </div>
+  <form class="card-content form-stack" method="post" action="/login">
+    {% if error %}{% call alert('warn') %}{{ error }}{% endcall %}{% endif %}
+    <input type="hidden" name="next" value="{{ next }}">
+    {% if ldap %}
+    <div><label class="label" for="username">Username</label><input class="input" type="text" id="username" name="username" value="{{ username or '' }}" autocomplete="username" required autofocus></div>
+    {% endif %}
+    <div><label class="label" for="password">Password</label><input class="input" type="password" id="password" name="password" autocomplete="current-password" required {% if not ldap %}autofocus{% endif %}></div>
+    <button class="btn wide" type="submit">Log in</button>
+  </form>
+</section>
+</main>
+{% endblock %}

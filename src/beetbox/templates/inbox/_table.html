@@ -1,0 +1,45 @@
+{% from "partials/macros.html" import cover, empty, icon, match, status as state %}
+{# Reloads when the inbox changes (live updates, or every 60s); the server answers 204 when nothing changed, and nothing reloads while focus is inside. #}
+<div id="inbox-table" hx-get="/inbox/table?status={{ status }}&v={{ table_version }}" hx-trigger="refresh[!this.matches(':focus-within')], every 60s [!document.hidden && !this.matches(':focus-within')]" hx-swap="outerHTML" data-refresh="inbox downloads">
+{% if folders %}
+<div class="table-container">
+<table class="table inbox-table">
+  <thead><tr><th class="table-head cover-col"><span class="sr-only">Cover</span></th><th class="table-head">Folder</th><th class="table-head">Status</th><th class="table-head">Best match</th><th class="table-head">In library</th><th class="table-head hide-sm">Updated</th><th class="table-head"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>
+  {% for f in folders %}
+  {% set audio = f.files|selectattr('audio')|list %}
+  <tr class="table-row">
+    {# The cover of the release the folder was matched to (or asked for), once that is known. #}
+    <td class="table-cell cover-col">{% if f.cover %}{{ cover(f.cover.src, alt='Cover of ' ~ f.cover.label) }}{% else %}{{ cover(None) }}{% endif %}</td>
+    <td class="table-cell col-folder">
+      <a class="strong folder-link" href="/inbox/folder?f={{ f.path|q }}"{{ f.path|lang }}>{{ f.path }}</a>
+      {% if f.error %}<p class="hint">{{ f.error }}</p>{% endif %}
+      {% if f.files %}
+      <details class="files" id="files-{{ f.path|uid }}" hx-preserve>
+        <summary class="hint">{{ audio|length }} audio file{{ 's' if audio|length != 1 }} · {{ f.files|length }} total · {{ f.files|sum(attribute='size')|size }}</summary>
+        <ul class="file-list">{% for file in f.files %}<li class="mono{% if not file.audio %} hint{% endif %}"{{ file.path|lang }}>{{ file.path }} <span class="hint">{{ file.size|size }}</span></li>{% endfor %}</ul>
+      </details>
+      {% endif %}
+    </td>
+    <td class="table-cell nowrap col-status">{{ state(f.shown, labels.get(f.shown, f.shown)) }}</td>
+    <td class="table-cell col-match">{% if f.best is not none %}{{ match(f.best) }}{% endif %}</td>
+    <td class="table-cell col-library">{% for a in f.library %}<a href="/library/album/{{ a.id }}" title="{{ a.how }}"{{ (a.albumartist ~ a.album)|lang }}>{{ a.albumartist }} – {{ a.album }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+    <td class="table-cell hide-sm nowrap mono hint">{{ f.updated_at|ts }}</td>
+    <td class="table-cell nowrap col-actions">
+      {% if f.status not in ('queued', 'previewing', 'importing') %}
+      <form class="inline" method="post" action="/inbox/folder/delete" hx-post="/inbox/folder/delete" hx-target="closest tr" hx-swap="delete" data-confirm="{% if f.status == 'imported' or f.library %}Delete {{ f.path }} from the inbox? Its files are removed; the library copy stays.{% else %}{{ f.path }} has not been imported. Delete it and all its files from the inbox? This cannot be undone.{% endif %}" data-confirm-button="Delete folder">
+        <input type="hidden" name="f" value="{{ f.path }}">
+        <input type="hidden" name="back" value="/inbox{% if status %}?status={{ status }}{% endif %}">
+        <button class="btn" data-variant="ghost" data-tone="destructive" data-size="icon-sm" aria-label="Delete {{ f.path }}" title="Delete from the inbox">{{ icon('trash') }}</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+{% call empty() %}{% if status %}No folders with this status. <a href="/inbox">Show all folders</a>{% else %}The inbox is empty. Album folders you drop into it, and music you get, show up here to review.{% endif %}{% endcall %}
+{% endif %}
+</div>

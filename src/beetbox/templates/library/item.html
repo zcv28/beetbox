@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import back, icon %}
+{% block title %}{{ item.title }}{% endblock %}
+{% block header %}
+<header class="page-header">
+  {% if album %}{{ back('/library/album/' ~ album.id, album.album) }}{% else %}{{ back('/library/tracks?singletons=1', 'Singletons') }}{% endif %}
+  <h1{{ item.title|lang }}>{{ item.title or '(untitled)' }}{% if item.get('title_original') %}<span class="original"{{ item.title_original|lang }}>{{ item.title_original }}</span>{% endif %}</h1>
+  <p class="subtitle"><span{{ item.artist|lang }}>{{ item.artist }}</span>{% if item.get('artist_original') %} · <span class="original-inline"{{ item.artist_original|lang }}>{{ item.artist_original }}</span>{% endif %}</p>
+  <div class="bar tight">
+    {% if album %}<a class="btn" data-variant="outline" data-size="sm" href="/library/album/{{ album.id }}">Open album</a>{% endif %}
+    <details class="menu">
+      <summary class="btn" data-variant="outline" data-size="sm">More actions{{ icon('more') }}</summary>
+      <div class="menu-content">
+        <form method="post" action="/library/item/{{ item.id }}/remove" data-confirm="Remove {{ item.title }} from the library? The file stays on disk." data-confirm-button="Remove track"><button class="menu-item" data-tone="destructive">Remove from library…<span class="hint">The file stays on disk</span></button></form>
+        <form method="post" action="/library/item/{{ item.id }}/remove" data-confirm="Remove {{ item.title }} and delete its file from disk? This cannot be undone." data-confirm-button="Delete track and file"><input type="hidden" name="delete" value="1"><button class="menu-item" data-tone="destructive">Delete track and file…<span class="hint">Removes the file from disk</span></button></form>
+      </div>
+    </details>
+  </div>
+</header>
+{% endblock %}
+{% block content %}
+<dl class="kv">
+  <dt>File</dt><dd><code>{{ item.path|fsdecode }}</code></dd>
+  <dt>Format</dt><dd><span class="mono">{{ item.format }} · {{ (item.bitrate // 1000) if item.bitrate else '?' }} kbps · {{ item.length|duration }}{% if item.bitdepth %} · {{ item.bitdepth }} bit{% endif %}{% if item.samplerate %} · {{ item.samplerate }} Hz{% endif %}</span></dd>
+  {% if item.mb_trackid %}<dt>MusicBrainz</dt><dd><a class="mono" href="https://musicbrainz.org/recording/{{ item.mb_trackid }}" target="_blank" rel="noopener noreferrer">{{ item.mb_trackid }}</a></dd>{% endif %}
+  <dt>Item ID</dt><dd class="mono">{{ item.id }}</dd>
+</dl>
+{% set lines = lyric_lines(item.lyrics) if item.lyrics and synced(item.lyrics) else [] %}
+<h2>Lyrics</h2>
+{% if lines %}
+<div class="table-container lyrics" data-density="compact"><table class="table">
+  <tbody>{% for l in lines %}<tr class="table-row"><td class="table-cell num hint">{{ l.time }}</td><td class="table-cell"><span{{ l.text|lang }}>{{ l.text }}</span>{% for s in l.sub %}<span class="original">{{ s }}</span>{% endfor %}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% elif item.lyrics %}
+<p class="hint">Plain lyrics, not time-synced.</p>
+{% else %}
+<p class="hint">No lyrics.</p>
+{% endif %}
+<form method="post" action="/library/item/{{ item.id }}/lyrics" class="bar">
+  <span class="hint">{% if item.get('lyrics_backend') %}From {% if item.get('lyrics_url') %}<a href="{{ item.lyrics_url }}" target="_blank" rel="noopener noreferrer">{{ item.lyrics_backend }}</a>{% else %}{{ item.lyrics_backend }}{% endif %}{% if item.get('lyrics_romaji') %}, romaji from {{ item.lyrics_romaji }}{% endif %}.{% elif item.get('lyrics_instrumental') %}Instrumental.{% endif %} Looks the track up on LRCLIB and replaces its lyrics if synced ones are found.</span>
+  <span class="spacer"></span>
+  <button class="btn" data-variant="outline" data-size="sm">{{ 'Fetch again' if lines else 'Fetch synced lyrics' }}</button>
+</form>
+<details class="box">
+<summary>Edit track</summary>
+<form method="post" action="/library/item/{{ item.id }}/edit" class="box-body">
+  <div class="fields">
+    {% for k, v in fields.items() if k != 'lyrics' %}<div><label class="label mono" for="f-{{ k }}">{{ k }}</label><input class="input" type="text" id="f-{{ k }}" name="{{ k }}" value="{{ v }}"></div>{% endfor %}
+  </div>
+  <label class="label mono" for="f-lyrics">lyrics</label>
+  <textarea class="input" id="f-lyrics" name="lyrics">{{ fields.lyrics }}</textarea>
+  <label class="label" for="extra">Other fields</label>
+  <textarea class="input" data-mono id="extra" name="extra">{% for k, v in flex.items() %}{% if v is string or v is number %}{{ k }}={{ v }}
+{% endif %}{% endfor %}</textarea>
+  <p class="field-description">One <code>field=value</code> per line. <code>field!</code> deletes a flexible field.</p>
+  <div class="bar">
+    <label class="checkbox-item"><input class="checkbox" type="checkbox" name="write" value="1" checked>Write tags to file</label>
+    <label class="checkbox-item"><input class="checkbox" type="checkbox" name="move" value="1">Move file to match the path format</label>
+    <span class="spacer"></span>
+    <button class="btn" data-size="sm">Save track</button>
+  </div>
+</form>
+</details>
+
+{% endblock %}

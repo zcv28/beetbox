@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import empty %}
+{% block title %}Artist aliases{% endblock %}
+{% block section %}Library{% endblock %}
+{% block content %}
+{% set tab = 'artists' %}{% include "library/_tabs.html" %}
+<div class="tab-content">
+<p class="lead">Merging puts every album of the merged names under one album artist: tags are rewritten and files move to that artist's folder. The names are remembered, so future imports use the kept name as well. Each merge can be undone from its job page. To merge artists not listed here, select them on the <a href="/library/artists">Artists</a> page.</p>
+
+<h2>Suggested</h2>
+{% for g in groups %}
+<form method="post" action="/library/artists/merge" class="box alias-group">
+  <input type="hidden" name="back" value="aliases">
+  <input type="hidden" name="write" value="1"><input type="hidden" name="move" value="1"><input type="hidden" name="tracks" value="1">
+  <div class="bar tight">
+    {% for n in g.names %}<label class="checkbox-item"><input class="checkbox" type="checkbox" name="name" value="{{ n.name }}" checked>{{ n.name }} <span class="hint">({{ n.albums }})</span></label>{% endfor %}
+  </div>
+  <div class="bar tight">
+    <span class="hint">{{ g.why|join('; ') }}</span>
+    <span class="spacer"></span>
+    <label class="inline-field">Keep the name <select class="input auto" data-size="sm" name="target">{% for n in g.names %}<option {% if n.name == g.target %}selected{% endif %}>{{ n.name }}</option>{% endfor %}</select></label>
+    <button class="btn" data-size="sm">Merge</button>
+  </div>
+</form>
+{% else %}{% call empty() %}No likely aliases found. Names only count as aliases when they share an artist ID, differ only in spelling width or case, or one is the other's sort or credited name.{% endcall %}{% endfor %}
+
+<h2>Remembered</h2>
+{% if aliases %}
+<div class="table-container"><table class="table">
+  <thead><tr><th class="table-head">Name on import</th><th class="table-head">Becomes</th><th class="table-head"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>{% for alias, name in aliases %}<tr class="table-row"><td class="table-cell">{{ alias }}</td><td class="table-cell">{{ name }}</td><td class="table-cell nowrap"><form class="inline" method="post" action="/library/artists/aliases/delete"><input type="hidden" name="alias" value="{{ alias }}"><button class="btn" data-variant="ghost" data-size="xs" aria-label="Forget {{ alias }}">Forget</button></form></td></tr>{% endfor %}</tbody>
+  <caption class="table-caption">Names are matched ignoring case.</caption>
+</table></div>
+{% else %}{% call empty() %}No aliases yet. Merged names are remembered here.{% endcall %}{% endif %}
+</div>
+{% endblock %}

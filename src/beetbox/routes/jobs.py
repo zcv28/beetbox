@@ -1,0 +1,206 @@
+from __future__ import annotations
+
+import time
+
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse
+
+from ..history import UNDOABLE
+from ..web import flash, is_fragment, partial, redirect, render, toast, user
+from . import console as console_routes
+
+router = APIRouter(prefix="/jobs")
+
+MAX_LOG = 200_000  # characters shown in the browser
+
+
+def _job_or_404(request: Request, job_id: int) -> dict:
+    job = request.app.state.state.job(job_id)
+    if job is None:
+        raise HTTPException(404, "job not found")
+    return job
+
+
+def _trim(log: str) -> tuple[str, bool]:
+    if len(log) <= MAX_LOG:
+        return log, False
+    return log[-MAX_LOG:], True
+
+
+def _list(request: Request, dismissed: bool, selected: int | None = None) -> dict:
+    state = request.app.state.state
+    return {
+        "jobs": state.jobs(limit=100, dismissed=dismissed),
+        "dismissed": dismissed,
+        "hidden": 0 if dismissed else state.dismissed_jobs(),
+        "selected": selected,
+    }
+
+
+def _pane(request: Request, job: dict) -> dict:
+    """The selected job: its log, and what can be undone."""
+    log, trimmed = _trim(job["log"])
+    state = request.app.state.state
+    snap = state.snapshot_for_job(job["id"]) if job["kind"] in UNDOABLE else None
+    undone = state.job(snap["undone_by"]) if snap and snap["undone_by"] else None
+    return {"job": job, "log": log, "trimmed": trimmed, "snap": snap, "undone": undone}
+
+
+@router.get("")
+def jobs_page(request: Request, dismissed: bool = False, console: bool = False, cmd: str = ""):
+    """The jobs list beside the selected job (none here), with the console above the list."""
+    return render(
+        request,
+        "jobs.html",
+        nav="jobs",
+        job=None,
+        **_list(request, dismissed),
+        **console_routes.context(request, cmd, console),
+    )
+
+
+@router.get("/table")
+def jobs_table(request: Request, dismissed: bool = False, sel: int | None = None):
+    return partial(request, "partials/jobs_table.html", **_list(request, dismissed, sel))
+
+
+def _back(back: str, fallback: str) -> str:
+    return back if back.startswith("/") and not back.startswith("//") else fallback
+
+
+@router.post("/dismiss")
+def jobs_dismiss_all(request: Request):
+    """Dismiss every finished job: the list starts clean, the jobs stay (logs, undo)."""
+    n = request.app.state.state.dismiss_jobs()
+    flash(
+        request,
+        f"Dismissed {n} finished job{'s' if n != 1 else ''}." if n else "Nothing to dismiss.",
+    )
+    return redirect("/jobs")
+
+
+@router.post("/restore")
+def jobs_restore_all(request: Request):
+    n = request.app.state.state.restore_jobs()
+    flash(request, f"{n} job{'s are' if n != 1 else ' is'} back in the list.")
+    return redirect("/jobs")
+
+
+# Finished jobs worth a pop-up: lookups run all the time, so only failed ones.
+QUIET = {"preview", "jellyfin-sync"}
+
+
+@router.get("/pill")
+def jobs_pill(request: Request, since: float = 0):
+    """Nav badge plus pop-ups for jobs that finished since the last poll."""
+    jobs = request.app.state.jobs
+    since = since or time.time()
+    done = request.app.state.state.jobs_finished_since(since)
+    if done:
+        since = max(j["finished_at"] for j in done)
+    toasts = [j for j in done if j["kind"] not in QUIET or j["status"] == "failed"]
+    # Downloads that finished or failed, as seen by the source watcher.
+    watch = getattr(request.app.state, "source_watch", None)
+    slsk = watch.events_since(since) if watch else []
+    if slsk:
+        since = max([since, *(e["at"] for e in slsk)])
+    # Requests (Get) that finished, failed or need you.
+    asked = [
+        w
+        for w in request.app.state.state.wanted_changed_since(since)
+        if w["status"] in ("done", "failed", "choosing", "review")
+    ]
+    if asked:
+        since = max([since, *(w["updated_at"] for w in asked)])
+    return partial(
+        request,
+        "partials/jobs_pill.html",
+        running=len(jobs.running()),
+        pending=jobs.pending(),
+        since=since,
+        toasts=toasts,
+        slsk_toasts=slsk,
+        wanted_toasts=asked,
+        oob=True,
+    )
+
+
+@router.get("/{job_id}")
+def job_page(
+    request: Request, job_id: int, dismissed: bool = False, console: bool = False, cmd: str = ""
+):
+    job = _job_or_404(request, job_id)
+    return render(
+        request,
+        "jobs.html",
+        nav="jobs",
+        **_list(request, dismissed, job_id),
+        **_pane(request, job),
+        **console_routes.context(request, cmd, console),
+    )
+
+
+@router.post("/{job_id}/undo")
+def job_undo(request: Request, job_id: int):
+    job = _job_or_404(request, job_id)
+    snap = request.app.state.state.snapshot_for_job(job_id)
+    if snap is None or job["status"] not in ("done", "failed"):
+        flash(request, "This job has nothing to undo.", "wip")
+        return redirect(f"/jobs/{job_id}")
+    if snap["undone_by"]:
+        flash(request, f"Already undone by job #{snap['undone_by']}.", "wip")
+        return redirect(f"/jobs/{job_id}")
+    undo = request.app.state.jobs.submit(
+        "undo", f"Undo #{job_id}: {job['title']}", {"snapshot_id": snap["id"]}, user(request)
+    )
+    return redirect(f"/jobs/{undo}")
+
+
+@router.get("/{job_id}/log")
+def job_log(request: Request, job_id: int):
+    job = _job_or_404(request, job_id)
+    log, trimmed = _trim(job["log"])
+    resp = partial(request, "partials/job_log.html", job=job, log=log, trimmed=trimmed)
+    if job["status"] not in ("queued", "running"):
+        resp.headers["HX-Refresh"] = "true"
+    return resp
+
+
+@router.post("/{job_id}/dismiss")
+def job_dismiss(request: Request, job_id: int, back: str = Form("")):
+    """Hide a finished job, failed or not, from the jobs list and Home."""
+    job = _job_or_404(request, job_id)
+    state = request.app.state.state
+    if job["status"] in ("queued", "running"):
+        if is_fragment(request):
+            return toast("A job can be dismissed once it has finished", kind="destructive")
+        flash(request, "A job can be dismissed once it has finished.", "wip")
+        return redirect(_back(back, f"/jobs/{job_id}"))
+    state.dismiss_jobs([job_id])
+    if is_fragment(request):
+        undo = {"url": f"/jobs/{job_id}/restore", "vals": {}}
+        return toast(f"Dismissed {job['title']}", undo=undo)
+    flash(request, "Dismissed: it no longer shows in the jobs list or on Home.")
+    return redirect(_back(back, f"/jobs/{job_id}"))
+
+
+@router.post("/{job_id}/restore")
+def job_restore(request: Request, job_id: int, back: str = Form("")):
+    _job_or_404(request, job_id)
+    request.app.state.state.restore_jobs([job_id])
+    if is_fragment(request):
+        return HTMLResponse("")  # the lists refresh themselves
+    return redirect(_back(back, f"/jobs/{job_id}"))
+
+
+@router.post("/{job_id}/cancel")
+def job_cancel(request: Request, job_id: int):
+    job = _job_or_404(request, job_id)
+    if request.app.state.jobs.cancel(job_id):
+        flash(request, f"Job #{job_id} cancelled.")
+    elif job["status"] == "running" and job["kind"] == "console":
+        request.app.state.console.kill()
+        flash(request, f"Sent interrupt to job #{job_id}.")
+    else:
+        flash(request, "Only queued jobs (or running console commands) can be cancelled.", "wip")
+    return redirect(f"/jobs/{job_id}")

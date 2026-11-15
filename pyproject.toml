@@ -1,0 +1,53 @@
+[project]
+name = "beetbox"
+version = "1.0.0"
+description = "A lightweight web frontend for the beets music library manager"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+  "beets[fetchart,embedart,lyrics,discogs,chroma]>=2.14,<3",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.9",
+  "itsdangerous>=2.1",
+  "httpx>=0.27",
+  "ldap3>=2.9",
+  # Japanese to romaji for lyrics (MeCab + the small UniDic dictionary).
+  "cutlet>=0.5",
+  "unidic-lite>=1.0.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "respx>=0.21"]
+
+[project.scripts]
+beetbox = "beetbox.main:run"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+beetbox = ["templates/**/*.html", "static/*", "static/**/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["B008", "E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["beetbox"]
+known-local-folder = ["conftest", "test_get", "test_pages"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

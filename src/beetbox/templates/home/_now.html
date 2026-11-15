@@ -1,0 +1,44 @@
+{% from "partials/macros.html" import icon %}
+{# Left column of Home: reloads itself when jobs, the inbox, downloads or requests change. #}
+<section aria-labelledby="h-needs">
+  <h2 id="h-needs">Needs you{% if needs %} <span class="count">{{ needs|length }}</span>{% endif %}</h2>
+  {% if needs %}
+  <ul class="rows">
+    {% for n in needs %}
+    <li class="row">
+      <span class="status row-dot" data-status="{{ n.tone }}" aria-hidden="true"></span>
+      <div class="row-main">
+        <a class="strong" href="{{ n.href }}"{% if n.name %}{{ n.name|lang }}{% endif %}>{{ n.title }}</a>
+        {% if n.detail %}<p class="hint">{{ n.detail }}</p>{% endif %}
+      </div>
+      <a class="btn" data-variant="outline" data-size="sm" href="{{ n.href }}" aria-label="{{ n.action }}: {{ n.title }}">{{ n.action }}</a>
+      {% if n.dismiss %}<form class="inline" method="post" action="{{ n.dismiss }}" hx-post="{{ n.dismiss }}" hx-target="closest li" hx-swap="delete"><input type="hidden" name="back" value="/"><button class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Dismiss: {{ n.title }}" title="Dismiss">{{ icon('x') }}</button></form>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="caught-up">{{ icon('check') }}Nothing needs you right now.</p>
+  {% endif %}
+</section>
+
+<section aria-labelledby="h-coming">
+  <h2 id="h-coming">Coming in</h2>
+  {% if coming %}
+  <ul class="rows">
+    {% for it in coming %}
+    {% set t = it.w.transfer if it.kind == 'request' else it.r %}
+    <li class="row">
+      <div class="row-main">
+        <a class="strong" href="{{ '/wanted/' ~ it.w.id if it.kind == 'request' else '/get/coming#c-' ~ it.key }}"{{ it.title|lang }}>{{ it.title }}</a>{% if it.artist %} <span class="release-artist"{{ it.artist|lang }}>{{ it.artist }}</span>{% endif %}
+        {% if it.kind == 'request' %}{% if t %}<p class="hint">{{ 'Queued at' if t.state == 'queued' else 'Downloading from' }} {{ t.origin }}</p>{% elif wanted_detail(it.w) %}<p class="hint">{{ wanted_detail(it.w) }}</p>{% endif %}
+        {% else %}<p class="hint">{% if it.r.state == 'queued' %}Queued at {{ it.r.origin }}{% if it.r.place %}, place {{ it.r.place }}{% endif %}{% else %}Downloading from {{ it.r.origin }}{% endif %}</p>{% endif %}
+      </div>
+      {% if t and t.state in ('downloading', 'queued') %}<span class="match"><span class="mono">{{ '%.0f'|format(t.percent) }}%</span><progress class="progress" value="{{ t.percent }}" max="100" aria-label="{{ it.title }} progress"></progress></span>{% elif it.kind == 'request' %}{% set w = it.w %}{% include "wanted/_chip.html" %}{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="more-link"><a href="/get/coming">Everything coming in{{ icon('arrow-right') }}</a></p>
+  {% else %}
+  <p class="hint">Nothing is downloading.{% if sources_enabled %} Get an album from <a href="/get/missing">Missing</a>, or <a href="/get/find">find one by hand</a>.{% endif %}</p>
+  {% endif %}
+</section>

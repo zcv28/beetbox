@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "partials/macros.html" import alert, empty, icon %}
+{% block title %}{{ 'Singletons' if singletons else 'Tracks' }}{% endblock %}
+{% block section %}Library{% endblock %}
+{% block content %}
+{% set tab = 'tracks' %}{% include "library/_tabs.html" %}
+<div class="tab-content">
+<form class="bar" method="get" action="/library/tracks">
+  <input type="hidden" name="singletons" value="{{ singletons }}">
+  <div class="input-group grow">{{ icon('search') }}<input class="input" data-mono type="search" name="q" value="{{ q }}" placeholder="Search tracks, or a beets query: artist:Foo format:FLAC" aria-label="Search tracks"></div>
+  <button class="btn" data-variant="outline">Search</button>
+</form>
+<nav class="toggles" aria-label="Which tracks">
+  <a class="toggle" data-variant="outline" href="/library/tracks{{ '?q=' ~ q|q if q }}" {% if not singletons %}aria-current="page"{% endif %}>All tracks</a>
+  <a class="toggle" data-variant="outline" href="/library/tracks?singletons=1{{ '&q=' ~ q|q if q }}" {% if singletons %}aria-current="page"{% endif %}>Singletons</a>
+</nav>
+{% if error %}{% call alert('warn') %}Query error: {{ error }}{% endcall %}{% endif %}
+{% if items %}<div class="table-container" data-density="compact"><table class="table">
+  <thead><tr><th class="table-head">Artist</th><th class="table-head">Title</th><th class="table-head">Album</th><th class="table-head num">Length</th><th class="table-head hide-sm">Format</th></tr></thead>
+  <tbody>{% include "library/_track_rows.html" %}</tbody>
+</table></div>{% endif %}
+{% if not items and not error %}{% call empty() %}{% if q %}No tracks match this query. <a href="/library/tracks{{ '?singletons=1' if singletons }}">Clear the search</a>{% else %}No {{ 'singletons' if singletons else 'tracks' }} yet.{% endif %}{% endcall %}{% endif %}
+{% if page > 1 %}<div class="bar"><a class="btn" data-variant="outline" data-size="sm" href="?q={{ q|q }}&singletons={{ singletons }}&page={{ page - 1 }}">Previous</a></div>{% endif %}
+</div>
+{% endblock %}
