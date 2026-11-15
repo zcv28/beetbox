@@ -73,9 +73,28 @@ def test_logout_goes_to_the_proxy_sign_out(app):
     assert r.headers["location"] == "/login"
 
 
-def test_hostnames_are_resolved():
-    proxies = TrustedProxies(["localhost"])
-    assert proxies.trusts("127.0.0.1")
+def test_hostnames_are_resolved(monkeypatch):
+    import socket
+
+    from beetbox import auth
+
+    ips = {"caddy": "172.18.0.4"}
+
+    def lookup(host, port):
+        if host not in ips:
+            raise socket.gaierror(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ips[host], 0))]
+
+    clock = [5.0]  # seconds since boot: under the TTL, as on a fresh machine
+    monkeypatch.setattr(auth.socket, "getaddrinfo", lookup)
+    monkeypatch.setattr(auth.time, "monotonic", lambda: clock[0])
+    proxies = TrustedProxies(["caddy", "gone"])
+    assert proxies.trusts("172.18.0.4")
     assert not proxies.trusts("10.1.2.3")
     assert not proxies.trusts("not-an-ip")
+    # Recreated containers get new addresses: looked up again after the TTL.
+    ips["caddy"] = "172.18.0.9"
+    assert not proxies.trusts("172.18.0.9")  # still cached
+    clock[0] += TrustedProxies.TTL + 1
+    assert proxies.trusts("172.18.0.9")
     assert not TrustedProxies([])

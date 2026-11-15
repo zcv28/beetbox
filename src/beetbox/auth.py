@@ -64,7 +64,7 @@ class TrustedProxies:
             except ValueError:
                 self.hosts.append(e)
         self._resolved: set[ipaddress._BaseAddress] = set()
-        self._at = 0.0
+        self._at: float | None = None  # not looked up yet
         self._lock = threading.Lock()
 
     def __bool__(self) -> bool:
@@ -72,7 +72,8 @@ class TrustedProxies:
 
     def _host_ips(self) -> set:
         with self._lock:
-            if time.monotonic() - self._at > self.TTL:
+            # monotonic() counts from boot, so it can be under TTL right after one.
+            if self._at is None or time.monotonic() - self._at > self.TTL:
                 ips = set()
                 for h in self.hosts:
                     try:
