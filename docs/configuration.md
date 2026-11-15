@@ -15,8 +15,17 @@ Variables from before the rename (`BEETSUI_*`) still work; the log says which to
 | `LDAP_BIND_DN`, `LDAP_BIND_PASSWORD` | | Account used to search for users. Empty: anonymous search. |
 | `LDAP_USER_FILTER` | `(uid={username})` | Who may sign in. Must contain `{username}`; add a `memberOf` clause to limit it to a group. |
 | `LDAP_START_TLS` | `false` | Upgrade the connection with StartTLS. |
+| `BEETBOX_ADMIN_GROUPS` | `beetbox_admins` | Groups allowed in, comma-separated, any case. Applies to LDAP (read from `memberOf`) and proxy sign-in; the shared password ignores it. Empty: anyone who signs in. |
+| `BEETBOX_TRUSTED_PROXIES` | | Proxies whose sign-in headers are believed: compose service names (e.g. `caddy`), IPs or networks. Empty: off. |
+| `BEETBOX_TRUSTED_USER_HEADER` | `X-authentik-username` | Header with the signed-in user. |
+| `BEETBOX_TRUSTED_GROUPS_HEADER` | `X-authentik-groups` | Header with their groups, separated by `\|`. |
+| `BEETBOX_LOGOUT_URL` | | Where Log out goes after a proxy sign-in, e.g. `/outpost.goauthentik.io/sign_out`. |
 | `BEETBOX_SECRET_KEY` | generated | Signs the session cookie. Generated once and kept in `/config/beetbox/secret_key`. |
 | `BEETBOX_SECURE_COOKIES` | `false` | Send cookies over HTTPS only. Turn on behind an HTTPS reverse proxy. |
+
+### Single sign-on through a proxy
+
+Behind Authentik forward auth (or any proxy that sends the user and groups as headers), beetbox can skip its own login: set `BEETBOX_TRUSTED_PROXIES` to the proxy, and `BEETBOX_LOGOUT_URL` so Log out also signs out of the proxy. Headers are only believed when the connection itself comes from that proxy (not from `X-Forwarded-For`), so other containers on the network can't sign in by sending them. The proxy must also drop these headers when a browser sends them; with Caddy, add `request_header -X-Authentik-Username` and `request_header -X-Authentik-Groups` to the site and keep `forward_auth` inside a `route` block (as Authentik's example does), so the removal runs first: Caddy otherwise orders `forward_auth` before `request_header`, which would remove the real ones. With proxy sign-in on, `BEETBOX_PASSWORD` is optional, and LDAP or the password still work for requests that don't come through the proxy.
 
 ## Inbox and import
 

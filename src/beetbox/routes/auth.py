@@ -60,5 +60,8 @@ def login(
 
 @router.post("/logout")
 def logout(request: Request):
+    by_proxy = request.session.get("proxy")
     request.session.clear()
-    return redirect("/login")
+    # Signed in by the proxy: /login would sign straight back in, so sign out there.
+    url = request.app.state.settings.logout_url
+    return redirect(url if by_proxy and url else "/login")

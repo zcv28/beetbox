@@ -111,6 +111,14 @@ class Settings:
     # Hours between copies of library.db and state.db (0: none), and how many to keep.
     backup_hours: int = 24
     backup_keep: int = 7
+    # Who may use beetbox: members of any of these groups (empty: anyone who signs in).
+    admin_groups: list[str] = field(default_factory=lambda: ["beetbox_admins"])
+    # Proxies (hostnames, IPs or networks) whose sign-in headers are trusted.
+    trusted_proxies: list[str] = field(default_factory=list)
+    trusted_user_header: str = "X-authentik-username"
+    trusted_groups_header: str = "X-authentik-groups"
+    # Where Log out goes for people signed in by the proxy (its own sign-out).
+    logout_url: str = ""
 
     @property
     def slskd_enabled(self) -> bool:
@@ -167,6 +175,11 @@ class Settings:
             lyrics_romaji=_str("BEETBOX_LYRICS_ROMAJI", "below").lower() or "below",
             backup_hours=max(0, _int("BEETBOX_BACKUP_HOURS", 24)),
             backup_keep=max(1, _int("BEETBOX_BACKUP_KEEP", 7)),
+            admin_groups=_list("BEETBOX_ADMIN_GROUPS", "beetbox_admins"),
+            trusted_proxies=_list("BEETBOX_TRUSTED_PROXIES", ""),
+            trusted_user_header=_str("BEETBOX_TRUSTED_USER_HEADER", "X-authentik-username"),
+            trusted_groups_header=_str("BEETBOX_TRUSTED_GROUPS_HEADER", "X-authentik-groups"),
+            logout_url=_str("BEETBOX_LOGOUT_URL"),
         )
         s.validate()
         return s
@@ -187,9 +200,10 @@ class Settings:
                 raise SettingsError(f"LDAP is enabled but {', '.join(missing)} is not set")
             if "{username}" not in self.ldap_user_filter:
                 raise SettingsError("LDAP_USER_FILTER must contain '{username}'")
-        elif not self.password:
+        elif not self.password and not self.trusted_proxies:
             raise SettingsError(
-                "BEETBOX_PASSWORD must be set (or enable LDAP with BEETBOX_LDAP_ENABLED=true)"
+                "BEETBOX_PASSWORD must be set (or enable LDAP with BEETBOX_LDAP_ENABLED=true, "
+                "or sign in through a proxy with BEETBOX_TRUSTED_PROXIES)"
             )
 
     def ensure_secret_key(self) -> str:

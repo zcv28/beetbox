@@ -8,7 +8,9 @@ export BEETBOX_DATA
 # Installs from before the rename keep their state in /config/beets-ui: move it once.
 if [ "$BEETBOX_DATA" = /config/beetbox ] && [ -d /config/beets-ui ] && [ ! -e /config/beetbox ]; then
     echo "beetbox: moving /config/beets-ui to /config/beetbox"
-    mv /config/beets-ui /config/beetbox
+    # A folder mounted there on its own can't be moved: mount it at /config/beetbox.
+    mv /config/beets-ui /config/beetbox 2>/dev/null \
+        || echo "beetbox: couldn't move /config/beets-ui (a separate mount?); mount it at /config/beetbox instead"
 fi
 
 mkdir -p "$BEETSDIR" "$BEETBOX_DATA"

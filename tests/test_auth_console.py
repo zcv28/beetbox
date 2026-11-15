@@ -3,7 +3,7 @@ from __future__ import annotations
 import ldap3
 import pytest
 
-from beetbox.auth import RateLimiter, authenticate
+from beetbox.auth import AuthError, RateLimiter, authenticate
 from beetbox.console import ConsoleError, parse
 from beetbox.settings import Settings, SettingsError
 
@@ -38,6 +38,7 @@ def test_ldap_search_then_bind(monkeypatch):
         LDAP_BIND_DN="cn=svc,dc=example,dc=org",
         LDAP_BIND_PASSWORD="svcpw",
         LDAP_USER_FILTER="(&(uid={username})(memberOf=cn=music,ou=groups,dc=example,dc=org))",
+        BEETBOX_ADMIN_GROUPS="",  # the filter decides here
     )
     server = ldap3.Server("fake")
     setup = ldap3.Connection(server, client_strategy=ldap3.MOCK_SYNC)
@@ -61,6 +62,43 @@ def test_ldap_search_then_bind(monkeypatch):
     assert authenticate(s, "niki", "wrong", factory) is None
     assert authenticate(s, "other", "pw", factory) is None  # not in the group
     assert authenticate(s, "*", "x", factory) is None  # filter injection is escaped
+
+
+def _ldap_server():
+    server = ldap3.Server("fake")
+    setup = ldap3.Connection(server, client_strategy=ldap3.MOCK_SYNC)
+    for uid, groups in (("admin", ["media_admins", "music"]), ("guest", ["music"]), ("nobody", [])):
+        attrs = {"uid": uid, "userPassword": "pw", "cn": uid, "objectClass": "person"}
+        if groups:
+            attrs["memberOf"] = [f"cn={g},ou=groups,dc=example,dc=org" for g in groups]
+        setup.strategy.add_entry(f"uid={uid},ou=people,dc=example,dc=org", attrs)
+    return lambda: server
+
+
+def test_ldap_needs_an_admin_group(monkeypatch):
+    ldap = dict(
+        BEETBOX_LDAP_ENABLED="true",
+        LDAP_URL="ldap://fake",
+        LDAP_BASE_DN="ou=people,dc=example,dc=org",
+    )
+    factory = _ldap_server()
+    s = _settings(monkeypatch, **ldap)
+    assert s.admin_groups == ["beetbox_admins"]  # the default
+    with pytest.raises(AuthError, match="isn't in a group"):
+        authenticate(s, "admin", "pw", factory)
+    s = _settings(monkeypatch, **ldap, BEETBOX_ADMIN_GROUPS="Media_Admins, lldap_admin")
+    assert authenticate(s, "admin", "pw", factory) == "admin"  # names match in any case
+    assert authenticate(s, "admin", "bad", factory) is None  # a wrong password says so first
+    for uid in ("guest", "nobody"):
+        with pytest.raises(AuthError):
+            authenticate(s, uid, "pw", factory)
+    s = _settings(monkeypatch, **ldap, BEETBOX_ADMIN_GROUPS="")
+    assert authenticate(s, "nobody", "pw", factory) == "nobody"  # empty: anyone
+
+
+def test_password_login_ignores_groups(monkeypatch):
+    s = _settings(monkeypatch, BEETBOX_PASSWORD="pw")
+    assert authenticate(s, "", "pw") == "admin"
 
 
 def test_rate_limiter():

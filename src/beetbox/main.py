@@ -28,7 +28,7 @@ from . import artists as artists_svc
 from .acquire import Acquirer
 from .artist_pictures import ArtistPictures
 from .artwork.service import Artwork
-from .auth import RateLimiter
+from .auth import NOT_IN_GROUP, RateLimiter, TrustedProxies, proxy_user
 from .backup import Backups, library_path
 from .catalog import Catalog
 from .console import Console
@@ -45,6 +45,32 @@ log = logging.getLogger("beetbox")
 PUBLIC_PREFIXES = ("/login", "/static/", "/healthz")
 
 
+PEER = "beetbox.peer"
+
+
+class RecordPeer:
+    """Keep the address the connection really came from, before proxy headers replace it.
+
+    Sign-in headers are only believed from a trusted proxy, so this must be the socket's
+    peer, not the ``X-Forwarded-For`` that any client can send.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket") and scope.get("client"):
+            scope[PEER] = scope["client"][0]
+        await self.app(scope, receive, send)
+
+
+def create_served_app():
+    """The app as uvicorn serves it: real peer recorded, then forwarded headers applied."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    return RecordPeer(ProxyHeadersMiddleware(create_app(), trusted_hosts="*"))
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -55,6 +81,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
                 if urlsplit(origin).netloc != host.split(",")[0].strip():
                     return PlainTextResponse("cross-origin request rejected", status_code=403)
+        settings = request.app.state.settings
+        peer = request.scope.get(PEER) or (request.client.host if request.client else None)
+        signed = proxy_user(settings, request.app.state.trusted_proxies, peer, request.headers)
+        if signed:
+            name, ok = signed
+            if not ok:
+                return PlainTextResponse(f"Signed in as {name}. {NOT_IN_GROUP}", status_code=403)
+            if request.session.get("user") != name:
+                request.session.clear()
+                request.session["user"] = name
+                request.session["proxy"] = True
         if path.startswith(PUBLIC_PREFIXES) or request.session.get("user"):
             return await call_next(request)
         if request.headers.get("hx-request"):
@@ -148,6 +185,7 @@ def create_app(settings: Settings | None = None, background: bool = True) -> Fas
     app.state.source_watch = source_watch
     app.state.acquirer = acquirer
     app.state.limiter = RateLimiter()
+    app.state.trusted_proxies = TrustedProxies(settings.trusted_proxies)
     app.state.release_covers = release_covers
     app.state.artist_pictures = ArtistPictures(settings.data_dir / "artist-pictures", artwork)
     app.state.catalog = Catalog(state)
@@ -228,13 +266,12 @@ def run() -> None:
         )
     port = int(os.environ.get("BEETBOX_PORT", "8337"))
     uvicorn.run(
-        "beetbox.main:create_app",
+        "beetbox.main:create_served_app",
         factory=True,
         host=os.environ.get("BEETBOX_HOST", "0.0.0.0"),
         port=port,
         workers=1,
-        proxy_headers=True,
-        forwarded_allow_ips="*",
+        proxy_headers=False,  # applied inside create_served_app, after RecordPeer
         log_level="info",
         # Open live-update streams would otherwise hold a restart up.
         timeout_graceful_shutdown=3,
