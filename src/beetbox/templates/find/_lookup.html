@@ -4,7 +4,7 @@
 {% set back = '/get/find?q=' ~ q|q ~ '&src=' ~ src %}
 <div class="lookup" id="lookup-{{ kind }}">
 {% if error %}
-{% call alert('warn', "Couldn't search " ~ source_name) %}{{ error }}. It may be busy; search again in a moment.{% endcall %}
+{% call alert('warn', "Couldn't search " ~ source_name) %}{{ error }}. It may be busy; search again in a moment{% if src != 'deezer' %}, or <a href="/get/find?q={{ q|q }}&src=deezer">search Deezer instead</a>{% endif %}.{% endcall %}
 {% elif not found %}
 <p class="hint">{{ {'artists': 'No artist', 'releases': 'No release', 'tracks': 'No track'}[kind] }} on {{ source_name }} matches “{{ q }}”.</p>
 {% elif kind == 'artists' %}

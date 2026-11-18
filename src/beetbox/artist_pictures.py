@@ -2,7 +2,7 @@
 the library has no albums by (or no picture of).
 
 Found by the artist's ID only, never by name, so a picture is never someone else's:
-VocaDB, TouhouDB and UtaiteDB give the artist's own picture; for a MusicBrainz artist,
+VocaDB, TouhouDB, UtaiteDB and Deezer give the artist's own picture; for a MusicBrainz artist,
 fanart.tv (with an API key) or Wikimedia Commons through the artist's MusicBrainz
 links. Kept on disk like release covers, and an artist without one is asked again
 after a week.
@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-from .discography import UUID, VOCADB
+from .discography import DEEZER, UUID, VOCADB
 from .release_covers import DIGITS, ImageCache
 
 # Artwork sources that find an artist by MusicBrainz ID.
@@ -23,7 +23,7 @@ BY_MBID = ["fanarttv", "wikidata"]
 
 
 def known(source: str, artist_id: str) -> bool:
-    if source in VOCADB:
+    if source in VOCADB or source == "deezer":
         return bool(DIGITS.match(artist_id))
     return source == "musicbrainz" and bool(UUID.match(artist_id))
 
@@ -45,6 +45,12 @@ class ArtistPictures(ImageCache):
             r.raise_for_status()
             pic = r.json().get("mainPicture") or {}
             return pic.get("urlThumb") or pic.get("urlOriginal") or ""
+        if source == "deezer":
+            r = self.http.get(f"{DEEZER}/artist/{artist_id}")
+            r.raise_for_status()
+            url = r.json().get("picture_big") or ""
+            # Deezer's generic silhouette for an artist without a picture.
+            return "" if "/artist//" in url else url
         failed: Exception | None = None
         for src in self.artwork.enabled("artist", BY_MBID):
             try:

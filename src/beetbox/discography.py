@@ -6,6 +6,8 @@ Each album artist is looked up where its albums were tagged from:
   found by the artist ID the beets-vocadb plugin stores in
   ``mb_albumartistid``.
 * MusicBrainz: the artist's release groups.
+* Deezer: the artist's albums (Find's artist pages only: the library is tagged from
+  MusicBrainz, so no library artist is looked up there).
 
 Lookups are cached in beetbox's state database and refreshed by a job.
 Which releases are owned is worked out when the page is shown, so new
@@ -36,10 +38,12 @@ VOCADB = {
     "utaitedb": "https://utaitedb.net",
 }
 MUSICBRAINZ = "https://musicbrainz.org"
+DEEZER = "https://api.deezer.com"
 MB_VARIOUS = "89ad4ac3-39f7-470e-963a-56509c546377"
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 SOURCE_NAMES = {"vocadb": "VocaDB", "touhoudb": "TouhouDB", "utaitedb": "UtaiteDB"}
 SOURCE_NAMES["musicbrainz"] = "MusicBrainz"
+SOURCE_NAMES["deezer"] = "Deezer"
 
 # Release kinds shown as filters, in order.
 KINDS = ("album", "ep", "single", "compilation", "other")
@@ -53,6 +57,8 @@ VOCADB_KINDS = {
     "Single": "single",
     "Compilation": "compilation",
 }
+DEEZER_KINDS = {"album": "album", "ep": "ep", "single": "single", "compile": "compilation"}
+DEEZER_TYPES = {"album": "Album", "ep": "EP", "single": "Single", "compile": "Compilation"}
 MB_OTHER = {
     "Live",
     "Remix",
@@ -127,6 +133,12 @@ def owned_index(lib: Any) -> dict[str, Any]:
             for ar in artists:
                 years.setdefault((ar, str(a.year)), []).append(mine)
     return {"ids": ids, "pairs": pairs, "titles": titles, "years": years}
+
+
+def owned_ids(source: str, *ids: str) -> list[str]:
+    """The IDs a release can be told to be in the library by: none for Deezer (the
+    library has no Deezer IDs, and its numbers could be a VocaDB album's)."""
+    return [] if source == "deezer" else [i for i in ids if i]
 
 
 def is_owned(index: dict[str, Any], ids: list[str], artists: list[str], albums: list[str]) -> bool:
@@ -230,32 +242,81 @@ def library_groups(lib: Any) -> dict[tuple[str, str], dict[str, Any]]:
 # ---------------------------------------------------------------- lookups
 
 
-class Client:
-    """HTTP client that keeps to each site's request rate."""
+# Answers worth asking again after a pause: rate limits and a site under load.
+RETRY = {429, 500, 502, 503, 504}
+MAX_PAUSE = 10.0
 
-    def __init__(self, http: httpx.Client | None = None):
+
+def _pause(attempt: int, r: httpx.Response | None = None) -> float:
+    """How long to wait before asking again: what the site says (Retry-After), else
+    1, 2, 4... seconds; never more than MAX_PAUSE."""
+    said = (r.headers.get("retry-after") or "") if r is not None else ""
+    if said.strip().isdigit():
+        return min(float(said), MAX_PAUSE)
+    return min(float(2**attempt), MAX_PAUSE)
+
+
+class Client:
+    """HTTP client that keeps to each site's request rate, and asks again when a site is
+    busy (up to ``attempts`` times in all, within ``budget`` seconds when given) or
+    can't be reached (once more: a timeout is costly enough)."""
+
+    def __init__(
+        self,
+        http: httpx.Client | None = None,
+        attempts: int = 3,
+        timeout: float | httpx.Timeout = 30,
+        budget: float | None = None,
+    ):
         self.http = http or httpx.Client(
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-            timeout=30,
+            timeout=timeout,
             follow_redirects=True,
         )
+        self.attempts = max(1, attempts)
+        self.budget = budget
         self._last: dict[str, float] = {}
 
     def get(self, url: str, params: dict[str, Any], interval: float) -> Any:
         host = httpx.URL(url).host
-        wait = self._last.get(host, 0) + interval - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        for attempt in range(3):
+        start = time.monotonic()
+        unreachable = 0
+
+        def again(pause: float, attempt: int) -> bool:
+            if attempt >= self.attempts - 1:
+                return False
+            if self.budget is not None and time.monotonic() - start + pause > self.budget:
+                return False
+            time.sleep(pause)
+            return True
+
+        for attempt in range(self.attempts):
+            wait = self._last.get(host, 0) + interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
             self._last[host] = time.monotonic()
-            r = self.http.get(url, params=params)
-            if r.status_code in (429, 503) and attempt < 2:
-                time.sleep(2 * (attempt + 1))
+            try:
+                r = self.http.get(url, params=params)
+            except httpx.TransportError:  # timed out, refused, reset
+                unreachable += 1
+                if unreachable < 2 and again(_pause(attempt), attempt):
+                    continue
+                raise
+            if r.status_code in RETRY and again(_pause(attempt, r), attempt):
                 continue
             if r.status_code == 404:
                 raise DiscographyError("artist not found")
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            # Deezer answers 200 and says what went wrong in the body.
+            err = data.get("error") if isinstance(data, dict) else None
+            if isinstance(err, dict):
+                if err.get("code") == 800:
+                    raise DiscographyError("not found")
+                if err.get("code") == 4 and again(_pause(attempt + 1), attempt):
+                    continue  # over its request quota
+                raise DiscographyError(str(err.get("message") or "error").lower())
+            return data
         raise DiscographyError("rate limited")  # pragma: no cover - loop always returns
 
 
@@ -350,11 +411,56 @@ def fetch_musicbrainz(client: Client, artist_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def deezer_release(it: dict[str, Any]) -> dict[str, Any]:
+    """A discography row for a Deezer album."""
+    kind = it.get("record_type") or ""
+    title = it.get("title") or ""
+    return {
+        "id": str(it["id"]),
+        "title": title,
+        "original": "",
+        "kind": DEEZER_KINDS.get(kind, "other"),
+        "type": DEEZER_TYPES.get(kind, kind.title()),
+        "date": it.get("release_date") or "",
+        "catalog": "",
+        "artists": "",
+        "url": f"https://www.deezer.com/album/{it['id']}",
+        "names": [title],
+    }
+
+
+def fetch_deezer(client: Client, artist_id: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for page in range(MAX_PAGES):
+        data = client.get(
+            f"{DEEZER}/artist/{artist_id}/albums",
+            {"limit": PAGE, "index": page * PAGE},
+            interval=0.15,
+        )
+        for it in data.get("data") or []:
+            if not it.get("id"):
+                continue
+            row = deezer_release(it)
+            # The same album is often listed twice (explicit and clean): keep the first.
+            key = (norm(row["title"]), row["kind"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(row)
+        if not data.get("next") or (page + 1) * PAGE >= int(data.get("total") or 0):
+            break
+    out.sort(key=lambda r: r["date"] or "9999")
+    return out
+
+
 def fetch(client: Client, source: str, artist_id: str) -> list[dict[str, Any]]:
     if source in VOCADB:
         return fetch_vocadb(client, source, artist_id)
     if source == "musicbrainz":
         return fetch_musicbrainz(client, artist_id)
+    if source == "deezer":
+        return fetch_deezer(client, artist_id)
     raise DiscographyError(f"unknown source {source}")
 
 

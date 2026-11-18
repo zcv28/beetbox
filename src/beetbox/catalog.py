@@ -1,19 +1,28 @@
-"""Looking music up where releases are catalogued: MusicBrainz, VocaDB, TouhouDB, UtaiteDB.
+"""Looking music up where releases are catalogued: MusicBrainz, Deezer, VocaDB, TouhouDB,
+UtaiteDB.
 
 Find searches these for artists, releases and tracks (not the download source),
 and any artist or release found gets a page of its own: an artist's whole
 discography to get all or some of, a release's tracklist to get it. Every release
-here is one the Get engine can fetch: a MusicBrainz release group, or a VocaDB
-(TouhouDB, UtaiteDB) album.
+here is one the Get engine can fetch: a MusicBrainz release group, a Deezer album, or
+a VocaDB (TouhouDB, UtaiteDB) album. Deezer is there for when MusicBrainz is slow or
+down: what is got from it is still tagged from MusicBrainz on import, found by name.
 
 One rate-limited client is shared by all pages, so lookups from several page
-parts at once queue politely (MusicBrainz allows one request a second). Answers
-are kept in memory for a while; artists' discographies go in the state database,
-next to the ones Missing looks up.
+parts at once queue politely at each site (MusicBrainz allows one request a second).
+Pages don't wait long: a busy site (MusicBrainz often answers "busy" under load) is
+asked again for up to BUDGET seconds, one that times out or can't be reached once
+more; a site that still failed is left alone for a short while, so the lookups queued
+behind it say so at once instead of each waiting in turn. An answer kept from earlier
+is shown when the site can't be asked, however old it is.
+
+Answers are kept in memory; artists' discographies go in the state database, next to
+the ones Missing looks up.
 """
 
 from __future__ import annotations
 
+import math
 import re
 import threading
 import time
@@ -23,15 +32,26 @@ from typing import Any
 import httpx
 
 from . import discography
-from .discography import MB_VARIOUS, MUSICBRAINZ, UUID, VOCADB, DiscographyError
+from .discography import DEEZER, MB_VARIOUS, MUSICBRAINZ, UUID, VOCADB, DiscographyError
 from .state import State
 
-SOURCES = ("musicbrainz", "vocadb", "touhoudb", "utaitedb")
+SOURCES = ("musicbrainz", "deezer", "vocadb", "touhoudb", "utaitedb")
 NAMES = discography.SOURCE_NAMES
 KINDS = ("artists", "releases", "tracks")
 DAY = 86400
 SEARCH_KEEP = 600
 LOOKUP_KEEP = 3600
+# Pages ask quickly; the jobs (Missing, Get) are more patient.
+TIMEOUT = httpx.Timeout(12, connect=5)
+ATTEMPTS = 5
+BUDGET = 10.0
+# A site that can't be reached is left alone this long; one still busy, BUSY_REST.
+# (A 500 is left out: it is more often about the one query than the whole site.)
+REST = 30.0
+BUSY_REST = 10.0
+DOWN = {429, 502, 503, 504}
+# Answers kept in memory, old ones too (shown when the site can't be asked).
+MAX_KEPT = 1000
 DIGITS = re.compile(r"^\d{1,12}$")
 # Characters with a meaning in MusicBrainz's (Lucene) search syntax.
 LUCENE = re.compile(r'([+\-&|!(){}\[\]^"~*?:\\/])')
@@ -47,7 +67,16 @@ def valid(source: str, ident: str) -> bool:
     """Whether an ID can belong to this source (pages are addressed by them)."""
     if source == "musicbrainz":
         return bool(UUID.match(ident or ""))
-    return source in VOCADB and bool(DIGITS.match(ident or ""))
+    return (source in VOCADB or source == "deezer") and bool(DIGITS.match(ident or ""))
+
+
+def artist_url(source: str, artist_id: str) -> str:
+    """The artist's page on the catalogue's own site."""
+    if source == "musicbrainz":
+        return f"{MUSICBRAINZ}/artist/{artist_id}"
+    if source == "deezer":
+        return f"https://www.deezer.com/artist/{artist_id}"
+    return f"{VOCADB[source]}/Ar/{artist_id}"
 
 
 def reason(e: Exception) -> str:
@@ -65,16 +94,41 @@ def reason(e: Exception) -> str:
     return "its answer couldn't be read"
 
 
+class Resting(DiscographyError):
+    """A site that just failed to answer, not asked again yet."""
+
+
 class _Shared:
-    """discography.Client, one request at a time (it keeps to each site's rate)."""
+    """discography.Client, one request at a time to each site (it keeps to each site's
+    rate); sites don't wait for each other, so a slow MusicBrainz doesn't hold up Deezer.
+    A site that couldn't answer (after asking again) rests for REST seconds."""
 
     def __init__(self, http: httpx.Client | None = None):
-        self._client = discography.Client(http)
-        self._lock = threading.Lock()
+        self._client = discography.Client(http, attempts=ATTEMPTS, timeout=TIMEOUT, budget=BUDGET)
+        self._locks: dict[str, threading.Lock] = {}
+        self._guard = threading.Lock()
+        self._resting: dict[str, float] = {}
 
     def get(self, url: str, params: dict[str, Any], interval: float) -> Any:
-        with self._lock:
-            return self._client.get(url, params, interval)
+        host = httpx.URL(url).host
+        with self._guard:
+            lock = self._locks.setdefault(host, threading.Lock())
+        with lock:
+            # Checked once in line: lookups that queued behind the failing one fail fast.
+            left = self._resting.get(host, 0) - time.monotonic()
+            if left > 0:
+                raise Resting(f"it didn't answer just now; asking again in {math.ceil(left)}s")
+            try:
+                data = self._client.get(url, params, interval)
+            except httpx.TransportError:
+                self._resting[host] = time.monotonic() + REST
+                raise
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code in DOWN:
+                    self._resting[host] = time.monotonic() + BUSY_REST
+                raise
+            self._resting.pop(host, None)
+            return data
 
 
 # ------------------------------------------------------------ MusicBrainz
@@ -210,6 +264,44 @@ def _vdb_album_of(source: str, song: dict[str, Any]) -> dict[str, Any] | None:
     return _vdb_album(source, min(albums, key=rank)) if albums else None
 
 
+# ------------------------------------------------------------------ Deezer
+
+
+def _dz_artists(it: dict[str, Any]) -> list[dict[str, str]]:
+    """Who a Deezer album is by: its main contributors, else its artist."""
+    listed = [c for c in it.get("contributors") or [] if c.get("role") == "Main" and c.get("id")]
+    if not listed and (it.get("artist") or {}).get("id"):
+        listed = [it["artist"]]
+    return [{"id": str(a["id"]), "name": a.get("name") or ""} for a in listed]
+
+
+def _dz_album(it: dict[str, Any], by: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A release from a Deezer album. Searches give less than a lookup (no date, no
+    contributors): those are marked ``partial``, and their page looks the album up."""
+    row = discography.deezer_release(it)
+    if by and not it.get("artist"):
+        it = {**it, "artist": by}
+    artists = _dz_artists(it)
+    return {
+        **row,
+        "source": "deezer",
+        "artist": ", ".join(a["name"] for a in artists),
+        "artists": artists,
+        "partial": "release_date" not in it,
+    }
+
+
+def _dz_artist(a: dict[str, Any]) -> dict[str, Any]:
+    n = int(a.get("nb_album") or 0)
+    return {
+        "source": "deezer",
+        "id": str(a["id"]),
+        "name": a.get("name") or "",
+        "original": "",
+        "detail": f"{n} release{'s' if n != 1 else ''}" if n else "",
+    }
+
+
 # ------------------------------------------------------------------ catalog
 
 
@@ -229,24 +321,39 @@ class Catalog:
     def _mb(self, path: str, params: dict[str, Any]) -> Any:
         return self._get(f"{MUSICBRAINZ}/ws/2/{path}", {**params, "fmt": "json"}, 1.1)
 
+    def _dz(self, path: str, params: dict[str, Any]) -> Any:
+        # Deezer allows 50 requests every 5 seconds.
+        return self._get(f"{DEEZER}/{path}", params, 0.15)
+
     def _vdb(self, source: str, path: str, params: dict[str, Any]) -> Any:
         return self._get(f"{VOCADB[source]}/api/{path}", {"lang": "Romaji", **params}, 0.5)
 
     def _kept(self, key: tuple, keep: float, fetch: Callable[[], Any]) -> Any:
+        """The answer kept for ``key`` if younger than ``keep``, else a fresh one; when
+        the site can't give one, the old answer (if any) rather than an error."""
         now = time.monotonic()
         with self._cache_lock:
             hit = self._cache.get(key)
             if hit and now - hit[0] < keep:
                 return hit[1]
-        value = fetch()
+        try:
+            value = fetch()
+        except CatalogError as e:
+            if hit and str(e) != "not found":
+                return hit[1]
+            raise
         with self._cache_lock:
-            if len(self._cache) > 500:
-                self._cache = {k: v for k, v in self._cache.items() if now - v[0] < keep}
+            if len(self._cache) >= MAX_KEPT:
+                # The oldest half goes.
+                ordered = sorted(self._cache.items(), key=lambda kv: kv[1][0])
+                self._cache = dict(ordered[MAX_KEPT // 2 :])
             self._cache[key] = (now, value)
         return value
 
     def _keep_release(self, rel: dict[str, Any]) -> None:
         """A release found by a search is remembered, so its page and Get need no lookup."""
+        if rel.get("partial"):
+            return
         with self._cache_lock:
             self._cache.setdefault(("release", rel["source"], rel["id"]), (time.monotonic(), rel))
 
@@ -260,9 +367,9 @@ class Catalog:
         found = self._kept(
             ("search", source, kind, text.casefold()),
             SEARCH_KEEP,
-            lambda: (self._search_mb if source == "musicbrainz" else self._search_vdb)(
-                source, kind, text
-            ),
+            lambda: {"musicbrainz": self._search_mb, "deezer": self._search_dz}.get(
+                source, self._search_vdb
+            )(source, kind, text),
         )
         for r in found:
             rel = r if kind == "releases" else r.get("release") if kind == "tracks" else None
@@ -299,6 +406,39 @@ class Catalog:
                     "artists": artists,
                     "length": round((rec.get("length") or 0) / 1000),
                     "release": _mb_release_of(rec),
+                }
+            )
+        return out
+
+    def _search_dz(self, _source: str, kind: str, text: str) -> list[dict[str, Any]]:
+        if kind == "artists":
+            data = self._dz("search/artist", {"q": text, "limit": 8})
+            return [_dz_artist(a) for a in data.get("data") or [] if a.get("id")]
+        if kind == "releases":
+            data = self._dz("search/album", {"q": text, "limit": 12})
+            return [_dz_album(it) for it in data.get("data") or [] if it.get("id")]
+        data = self._dz("search/track", {"q": text, "limit": 12})
+        out = []
+        for t in data.get("data") or []:
+            artist = t.get("artist") or {}
+            album = t.get("album") or {}
+            artists = (
+                [{"id": str(artist["id"]), "name": artist.get("name") or ""}]
+                if artist.get("id")
+                else []
+            )
+            out.append(
+                {
+                    "source": "deezer",
+                    "id": str(t["id"]),
+                    "title": t.get("title") or "",
+                    "original": "",
+                    "artist": artist.get("name") or "",
+                    "artists": artists,
+                    "length": int(t.get("duration") or 0),
+                    # Its album's artist isn't given: the track's is taken (for a
+                    # compilation the release page, looked up, says who it is by).
+                    "release": _dz_album(album, artist) if album.get("id") else None,
                 }
             )
         return out
@@ -359,6 +499,8 @@ class Catalog:
         def fetch() -> dict[str, Any]:
             if source == "musicbrainz":
                 return _mb_group(self._mb(f"release-group/{release_id}", {"inc": "artist-credits"}))
+            if source == "deezer":
+                return _dz_album(self._dz(f"album/{release_id}", {}))
             data = self._vdb(source, f"albums/{release_id}", {"fields": "Artists,AdditionalNames"})
             return _vdb_album(source, data)
 
@@ -393,7 +535,10 @@ class Catalog:
         def fetch() -> dict[str, Any]:
             if source == "musicbrainz":
                 a = _mb_artist(self._mb(f"artist/{artist_id}", {}))
-                return {**a, "url": f"{MUSICBRAINZ}/artist/{artist_id}"}
+                return {**a, "url": artist_url(source, artist_id)}
+            if source == "deezer":
+                a = _dz_artist(self._dz(f"artist/{artist_id}", {}))
+                return {**a, "url": artist_url(source, artist_id)}
             a = self._vdb(source, f"artists/{artist_id}", {})
             name = a.get("name") or a.get("defaultName") or ""
             original = a.get("defaultName") or ""
@@ -403,7 +548,7 @@ class Catalog:
                 "name": name,
                 "original": original if original != name else "",
                 "detail": a.get("artistType") or "",
-                "url": f"{VOCADB[source]}/Ar/{artist_id}",
+                "url": artist_url(source, artist_id),
             }
 
         return self._kept(("artist", source, artist_id), DAY, fetch)

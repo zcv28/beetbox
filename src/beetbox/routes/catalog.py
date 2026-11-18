@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from .. import beets_ctx, discography
-from ..catalog import KINDS, NAMES, SOURCES, Catalog, CatalogError, valid
+from ..catalog import KINDS, NAMES, SOURCES, Catalog, CatalogError, artist_url, valid
 from ..discography import norm
 from ..web import HERE, flash, partial, redirect, render
 
@@ -103,7 +103,11 @@ def _owned(
     if not rel:
         return "", None
     return discography.match(
-        index, [rel["id"]], _artist_names(rel, *artists), _titles(rel), rel.get("date") or ""
+        index,
+        discography.owned_ids(rel["source"], rel["id"]),
+        _artist_names(rel, *artists),
+        _titles(rel),
+        rel.get("date") or "",
     )
 
 
@@ -283,11 +287,7 @@ def artist_page(
         and request.app.state.artwork.artist_info(in_library)["image"] is not None,
         kinds=discography.KINDS,
         picked=picked,
-        url=(
-            f"{discography.MUSICBRAINZ}/artist/{artist_id}"
-            if source == "musicbrainz"
-            else f"{discography.VOCADB[source]}/Ar/{artist_id}"
-        ),
+        url=artist_url(source, artist_id),
     )
 
 
@@ -326,7 +326,11 @@ def artist_releases(
             continue
         row = {**rel, "source": source, "upcoming": bool(rel["date"] and rel["date"] > today)}
         row["owned"], row["suspect"] = discography.match(
-            index, [rel["id"]], names, rel.get("names") or [rel["title"]], rel["date"]
+            index,
+            discography.owned_ids(source, rel["id"]),
+            names,
+            rel.get("names") or [rel["title"]],
+            rel["date"],
         )
         row["w"] = requests.find({**row, "artist": name, "artists": []}, *names)
         rows.append(row)
@@ -346,18 +350,20 @@ def artist_releases(
         "rows": rows,
         "gettable": gettable,
         "maybe": maybe,
-        "unmatched": [a for a in _unmatched(lib, libname, releases) if a.id not in suspected],
+        "unmatched": [
+            a for a in _unmatched(lib, source, libname, releases) if a.id not in suspected
+        ],
         "library_name": libname,
         "looked_up": looked_up,
         "total": len(releases),
     }
 
 
-def _unmatched(lib: Any, libname: str, releases: list[dict]) -> list[Any]:
+def _unmatched(lib: Any, source: str, libname: str, releases: list[dict]) -> list[Any]:
     """The library's albums by an artist that none of the catalogue's releases claims."""
     if not libname:
         return []
-    ids = {r["id"] for r in releases}
+    ids = {i for r in releases for i in discography.owned_ids(source, r["id"])}
     titles: set[str] = set()
     for r in releases:
         for n in r.get("names") or [r["title"]]:
