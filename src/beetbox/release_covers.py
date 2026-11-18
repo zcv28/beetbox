@@ -2,8 +2,8 @@
 Find, and the inbox folders a lookup matched to a release).
 
 Fetched once from where the release was looked up (the Cover Art Archive for a
-MusicBrainz release group or release, the album picture for VocaDB, TouhouDB and
-UtaiteDB), kept on disk, and served from beetbox so pages never link out. A
+MusicBrainz release group or release, the album picture for Deezer, VocaDB, TouhouDB
+and UtaiteDB), kept on disk, and served from beetbox so pages never link out. A
 release with no cover is remembered for a week before it is asked again.
 
 ``full_url`` is the same release's cover at full size, for an album that was
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import httpx
 
-from .discography import USER_AGENT, UUID, VOCADB
+from .discography import DEEZER, USER_AGENT, UUID, VOCADB
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ def remote_url(source: str, release_id: str) -> str | None:
         return f"{VOCADB[source]}/Album/CoverPictureThumb/{release_id}"
     if source == "musicbrainz" and UUID.match(release_id):
         return f"{CAA}/release-group/{release_id}/front-250"
+    if source == "deezer" and DIGITS.match(release_id):
+        return f"{DEEZER}/album/{release_id}/image?size=big"
     if source == MB_RELEASE and UUID.match(release_id):
         return f"{CAA}/release/{release_id}/front-250"
     return None
@@ -147,6 +149,8 @@ class ReleaseCovers(ImageCache):
                 log.info("cover for %s %s: %s", source, release_id, e)
                 return None
             return pic.get("urlOriginal") or None
+        if source == "deezer":
+            return f"{DEEZER}/album/{release_id}/image?size=xl"
         kind = "release" if source == MB_RELEASE else "release-group"
         return f"{CAA}/{kind}/{release_id}/front"
 
@@ -157,5 +161,11 @@ class ReleaseCovers(ImageCache):
             return None
         # A real VocaDB picture redirects to the site's image host; an album without one
         # gets the site's "?" placeholder straight away.
-        real = (lambda r: bool(r.history)) if source in VOCADB else (lambda r: True)
+        # Deezer sends an album without a cover to its blank one ("/cover//").
+        if source in VOCADB:
+            real = lambda r: bool(r.history)  # noqa: E731
+        elif source == "deezer":
+            real = lambda r: "/cover//" not in str(r.url)  # noqa: E731
+        else:
+            real = lambda r: True  # noqa: E731
         return self._cached(f"{source}:{release_id}", lambda: url, real)

@@ -1,6 +1,6 @@
 # beetbox
 
-A light web frontend for [beets](https://beets.io). It finds albums missing from your library, downloads them (Soulseek through [slskd](https://github.com/slskd/slskd)), imports them with beets and keeps the library tidy: covers, artist pictures, romanized names, synced lyrics and upgrades. Suggestions come from [ListenBrainz](https://listenbrainz.org); discographies from MusicBrainz, VocaDB, TouhouDB and UtaiteDB.
+A light web frontend for [beets](https://beets.io). It finds albums missing from your library, downloads them (Soulseek through [slskd](https://github.com/slskd/slskd)), imports them with beets and keeps the library tidy: covers, artist pictures, romanized names, synced lyrics and upgrades. Suggestions come from [ListenBrainz](https://listenbrainz.org); discographies from MusicBrainz, Deezer, VocaDB, TouhouDB and UtaiteDB.
 
 ## Install
 

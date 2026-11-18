@@ -239,6 +239,22 @@ def tracklist(client: discography.Client, source: str, release_id: str) -> tuple
             for t in data.get("tracks") or []
         ]
         return tracks, release_id
+    if source == "deezer":
+        # Nothing to look it up by on import: beets finds it on MusicBrainz by name.
+        tracks: list[dict[str, Any]] = []
+        for _ in range(10):
+            data = client.get(
+                f"{discography.DEEZER}/album/{release_id}/tracks",
+                {"limit": 100, "index": len(tracks)},
+                interval=0.15,
+            )
+            page = data.get("data") or []
+            tracks += [
+                {"title": t.get("title") or "", "length": int(t.get("duration") or 0)} for t in page
+            ]
+            if not page or not data.get("next"):
+                break
+        return tracks, ""
     # MusicBrainz discographies list release groups: pick its usual release.
     data = client.get(
         f"{discography.MUSICBRAINZ}/ws/2/release",
@@ -1014,7 +1030,7 @@ def settle(state: State, lib: Any) -> int:
     for w in open_:
         if discography.is_owned(
             index,
-            [w["release_id"], w["lookup_id"]],
+            discography.owned_ids(w["source"], w["release_id"], w["lookup_id"]),
             [w["artist"], w["artist_original"] or ""],
             [w["album"], w["album_original"] or ""],
         ):
